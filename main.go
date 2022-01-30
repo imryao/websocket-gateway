@@ -20,7 +20,7 @@ func main() {
 	}
 }
 
-// run initializes the chatServer and then
+// run initializes the gatewayServer and then
 // starts a http.Server for the passed in address.
 func run() error {
 	if len(os.Args) < 2 {
@@ -33,7 +33,7 @@ func run() error {
 	}
 	log.Printf("listening on http://%v", l.Addr())
 
-	cs := newChatServer()
+	cs := newGatewayServer()
 	s := &http.Server{
 		Handler:      cs,
 		ReadTimeout:  time.Second * 10,

@@ -17,7 +17,7 @@ import (
 	"nhooyr.io/websocket"
 )
 
-func Test_chatServer(t *testing.T) {
+func Test_gatewayServer(t *testing.T) {
 	t.Parallel()
 
 	// This is a simple echo test with a single client.
@@ -113,15 +113,15 @@ func Test_chatServer(t *testing.T) {
 	})
 }
 
-// setupTest sets up chatServer that can be used
+// setupTest sets up gatewayServer that can be used
 // via the returned url.
 //
 // Defer closeFn to ensure everything is cleaned up at
 // the end of the test.
 //
-// chatServer logs will be logged via t.Logf.
+// gatewayServer logs will be logged via t.Logf.
 func setupTest(t *testing.T) (url string, closeFn func()) {
-	cs := newChatServer()
+	cs := newGatewayServer()
 	cs.logf = t.Logf
 
 	// To ensure tests run quickly under even -race.

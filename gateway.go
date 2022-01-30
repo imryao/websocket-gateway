@@ -14,8 +14,8 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// chatServer enables broadcasting to a set of subscribers.
-type chatServer struct {
+// gatewayServer enables broadcasting to a set of subscribers.
+type gatewayServer struct {
 	// subscriberMessageBuffer controls the max number
 	// of messages that can be queued for a subscriber
 	// before it is kicked.
@@ -39,9 +39,9 @@ type chatServer struct {
 	subscribers   map[*subscriber]struct{}
 }
 
-// newChatServer constructs a chatServer with the defaults.
-func newChatServer() *chatServer {
-	cs := &chatServer{
+// newGatewayServer constructs a gatewayServer with the defaults.
+func newGatewayServer() *gatewayServer {
+	cs := &gatewayServer{
 		subscriberMessageBuffer: 16,
 		logf:                    log.Printf,
 		subscribers:             make(map[*subscriber]struct{}),
@@ -62,13 +62,13 @@ type subscriber struct {
 	closeSlow func()
 }
 
-func (cs *chatServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (cs *gatewayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cs.serveMux.ServeHTTP(w, r)
 }
 
 // subscribeHandler accepts the WebSocket connection and then subscribes
 // it to all future messages.
-func (cs *chatServer) subscribeHandler(w http.ResponseWriter, r *http.Request) {
+func (cs *gatewayServer) subscribeHandler(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		cs.logf("%v", err)
@@ -92,7 +92,7 @@ func (cs *chatServer) subscribeHandler(w http.ResponseWriter, r *http.Request) {
 
 // publishHandler reads the request body with a limit of 8192 bytes and then publishes
 // the received message.
-func (cs *chatServer) publishHandler(w http.ResponseWriter, r *http.Request) {
+func (cs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
@@ -117,7 +117,7 @@ func (cs *chatServer) publishHandler(w http.ResponseWriter, r *http.Request) {
 //
 // It uses CloseRead to keep reading from the connection to process control
 // messages and cancel the context if the connection drops.
-func (cs *chatServer) subscribe(ctx context.Context, c *websocket.Conn) error {
+func (cs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error {
 	ctx = c.CloseRead(ctx)
 
 	s := &subscriber{
@@ -145,7 +145,7 @@ func (cs *chatServer) subscribe(ctx context.Context, c *websocket.Conn) error {
 // publish publishes the msg to all subscribers.
 // It never blocks and so messages to slow subscribers
 // are dropped.
-func (cs *chatServer) publish(msg []byte) {
+func (cs *gatewayServer) publish(msg []byte) {
 	cs.subscribersMu.Lock()
 	defer cs.subscribersMu.Unlock()
 
@@ -161,14 +161,14 @@ func (cs *chatServer) publish(msg []byte) {
 }
 
 // addSubscriber registers a subscriber.
-func (cs *chatServer) addSubscriber(s *subscriber) {
+func (cs *gatewayServer) addSubscriber(s *subscriber) {
 	cs.subscribersMu.Lock()
 	cs.subscribers[s] = struct{}{}
 	cs.subscribersMu.Unlock()
 }
 
 // deleteSubscriber deletes the given subscriber.
-func (cs *chatServer) deleteSubscriber(s *subscriber) {
+func (cs *gatewayServer) deleteSubscriber(s *subscriber) {
 	cs.subscribersMu.Lock()
 	delete(cs.subscribers, s)
 	cs.subscribersMu.Unlock()
