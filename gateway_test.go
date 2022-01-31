@@ -121,14 +121,14 @@ func Test_gatewayServer(t *testing.T) {
 //
 // gatewayServer logs will be logged via t.Logf.
 func setupTest(t *testing.T) (url string, closeFn func()) {
-	cs := newGatewayServer()
-	cs.logf = t.Logf
+	gs := newGatewayServer()
+	gs.logf = t.Logf
 
 	// To ensure tests run quickly under even -race.
-	cs.subscriberMessageBuffer = 4096
-	cs.publishLimiter.SetLimit(rate.Inf)
+	gs.subscriberMessageBuffer = 4096
+	gs.publishLimiter.SetLimit(rate.Inf)
 
-	s := httptest.NewServer(cs)
+	s := httptest.NewServer(gs)
 	return s.URL, func() {
 		s.Close()
 	}

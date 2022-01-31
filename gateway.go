@@ -41,17 +41,17 @@ type gatewayServer struct {
 
 // newGatewayServer constructs a gatewayServer with the defaults.
 func newGatewayServer() *gatewayServer {
-	cs := &gatewayServer{
+	gs := &gatewayServer{
 		subscriberMessageBuffer: 16,
 		logf:                    log.Printf,
 		subscribers:             make(map[*subscriber]struct{}),
 		publishLimiter:          rate.NewLimiter(rate.Every(time.Millisecond*100), 8),
 	}
-	cs.serveMux.Handle("/", http.FileServer(http.Dir(".")))
-	cs.serveMux.HandleFunc("/subscribe", cs.subscribeHandler)
-	cs.serveMux.HandleFunc("/publish", cs.publishHandler)
+	gs.serveMux.Handle("/", http.FileServer(http.Dir(".")))
+	gs.serveMux.HandleFunc("/subscribe", gs.subscribeHandler)
+	gs.serveMux.HandleFunc("/publish", gs.publishHandler)
 
-	return cs
+	return gs
 }
 
 // subscriber represents a subscriber.
@@ -62,21 +62,21 @@ type subscriber struct {
 	closeSlow func()
 }
 
-func (cs *gatewayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	cs.serveMux.ServeHTTP(w, r)
+func (gs *gatewayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	gs.serveMux.ServeHTTP(w, r)
 }
 
 // subscribeHandler accepts the WebSocket connection and then subscribes
 // it to all future messages.
-func (cs *gatewayServer) subscribeHandler(w http.ResponseWriter, r *http.Request) {
+func (gs *gatewayServer) subscribeHandler(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		cs.logf("%v", err)
+		gs.logf("%v", err)
 		return
 	}
 	defer c.Close(websocket.StatusInternalError, "")
 
-	err = cs.subscribe(r.Context(), c)
+	err = gs.subscribe(r.Context(), c)
 	if errors.Is(err, context.Canceled) {
 		return
 	}
@@ -85,14 +85,14 @@ func (cs *gatewayServer) subscribeHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		cs.logf("%v", err)
+		gs.logf("%v", err)
 		return
 	}
 }
 
 // publishHandler reads the request body with a limit of 8192 bytes and then publishes
 // the received message.
-func (cs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) {
+func (gs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
@@ -104,7 +104,7 @@ func (cs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cs.publish(msg)
+	gs.publish(msg)
 
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -117,17 +117,17 @@ func (cs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) 
 //
 // It uses CloseRead to keep reading from the connection to process control
 // messages and cancel the context if the connection drops.
-func (cs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error {
+func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error {
 	ctx = c.CloseRead(ctx)
 
 	s := &subscriber{
-		msgs: make(chan []byte, cs.subscriberMessageBuffer),
+		msgs: make(chan []byte, gs.subscriberMessageBuffer),
 		closeSlow: func() {
 			c.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
 		},
 	}
-	cs.addSubscriber(s)
-	defer cs.deleteSubscriber(s)
+	gs.addSubscriber(s)
+	defer gs.deleteSubscriber(s)
 
 	for {
 		select {
@@ -145,13 +145,13 @@ func (cs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 // publish publishes the msg to all subscribers.
 // It never blocks and so messages to slow subscribers
 // are dropped.
-func (cs *gatewayServer) publish(msg []byte) {
-	cs.subscribersMu.Lock()
-	defer cs.subscribersMu.Unlock()
+func (gs *gatewayServer) publish(msg []byte) {
+	gs.subscribersMu.Lock()
+	defer gs.subscribersMu.Unlock()
 
-	cs.publishLimiter.Wait(context.Background())
+	gs.publishLimiter.Wait(context.Background())
 
-	for s := range cs.subscribers {
+	for s := range gs.subscribers {
 		select {
 		case s.msgs <- msg:
 		default:
@@ -161,17 +161,17 @@ func (cs *gatewayServer) publish(msg []byte) {
 }
 
 // addSubscriber registers a subscriber.
-func (cs *gatewayServer) addSubscriber(s *subscriber) {
-	cs.subscribersMu.Lock()
-	cs.subscribers[s] = struct{}{}
-	cs.subscribersMu.Unlock()
+func (gs *gatewayServer) addSubscriber(s *subscriber) {
+	gs.subscribersMu.Lock()
+	gs.subscribers[s] = struct{}{}
+	gs.subscribersMu.Unlock()
 }
 
 // deleteSubscriber deletes the given subscriber.
-func (cs *gatewayServer) deleteSubscriber(s *subscriber) {
-	cs.subscribersMu.Lock()
-	delete(cs.subscribers, s)
-	cs.subscribersMu.Unlock()
+func (gs *gatewayServer) deleteSubscriber(s *subscriber) {
+	gs.subscribersMu.Lock()
+	delete(gs.subscribers, s)
+	gs.subscribersMu.Unlock()
 }
 
 func writeTimeout(ctx context.Context, timeout time.Duration, c *websocket.Conn, msg []byte) error {
