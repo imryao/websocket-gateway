@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -12,7 +11,7 @@ import (
 )
 
 func main() {
-	log.SetFlags(0)
+	//log.SetFlags(0)
 
 	err := run()
 	if err != nil {
@@ -23,11 +22,11 @@ func main() {
 // run initializes the gatewayServer and then
 // starts a http.Server for the passed in address.
 func run() error {
-	if len(os.Args) < 2 {
-		return errors.New("please provide an address to listen on as the first argument")
-	}
+	//if len(os.Args) < 2 {
+	//	return errors.New("please provide an address to listen on as the first argument")
+	//}
 
-	l, err := net.Listen("tcp", os.Args[1])
+	l, err := net.Listen("tcp", ":11082")
 	if err != nil {
 		return err
 	}
