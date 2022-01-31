@@ -35,7 +35,7 @@ type gatewayServer struct {
 	// serveMux routes the various endpoints to the appropriate handler.
 	serveMux http.ServeMux
 
-	subscribersMu sync.Mutex
+	subscribersMu sync.RWMutex
 	subscribers   map[string]*subscriber
 }
 
@@ -171,11 +171,49 @@ func (gs *gatewayServer) addSubscriber(key string, s *subscriber) {
 	gs.subscribersMu.Unlock()
 }
 
+// insertSubscriber initializes a subscriber with a random key
+func (gs *gatewayServer) insertSubscriber() (string, error) {
+	key, err := GenerateRandomString(16)
+	if err != nil {
+		return "", err
+	}
+	gs.subscribersMu.Lock()
+	gs.subscribers[key] = nil
+	gs.subscribersMu.Unlock()
+	return key, nil
+}
+
 // deleteSubscriber deletes the given subscriber.
 func (gs *gatewayServer) deleteSubscriber(key string) {
 	gs.subscribersMu.Lock()
 	delete(gs.subscribers, key)
 	gs.subscribersMu.Unlock()
+}
+
+// updateSubscriber updates the subscriber with a connection
+func (gs *gatewayServer) updateSubscriber(key string, s *subscriber) error {
+	s, err := gs.selectSubscriber(key)
+	if err != nil {
+		return err
+	}
+	if s != nil {
+		return errors.New("subscriber has already been connected")
+	}
+	gs.subscribersMu.Lock()
+	gs.subscribers[key] = s
+	gs.subscribersMu.Unlock()
+	return nil
+}
+
+// selectSubscriber selects the specified subscriber
+func (gs *gatewayServer) selectSubscriber(key string) (*subscriber, error) {
+	gs.subscribersMu.RLock()
+	s, exists := gs.subscribers[key]
+	gs.subscribersMu.RUnlock()
+	if exists {
+		return s, nil
+	}
+	return nil, errors.New("subscriber not found")
 }
 
 func writeTimeout(ctx context.Context, timeout time.Duration, c *websocket.Conn, msg []byte) error {
