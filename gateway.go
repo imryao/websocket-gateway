@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
 	"nhooyr.io/websocket"
@@ -127,7 +126,10 @@ func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 			c.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
 		},
 	}
-	key := uuid.New().String()
+	key, err := GenerateRandomString(16)
+	if err != nil {
+		return err
+	}
 	gs.addSubscriber(key, s)
 	defer gs.deleteSubscriber(key)
 
