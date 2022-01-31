@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
 	"nhooyr.io/websocket"
@@ -36,7 +37,7 @@ type gatewayServer struct {
 	serveMux http.ServeMux
 
 	subscribersMu sync.Mutex
-	subscribers   map[*subscriber]struct{}
+	subscribers   map[string]*subscriber
 }
 
 // newGatewayServer constructs a gatewayServer with the defaults.
@@ -44,7 +45,7 @@ func newGatewayServer() *gatewayServer {
 	gs := &gatewayServer{
 		subscriberMessageBuffer: 16,
 		logf:                    log.Printf,
-		subscribers:             make(map[*subscriber]struct{}),
+		subscribers:             make(map[string]*subscriber),
 		publishLimiter:          rate.NewLimiter(rate.Every(time.Millisecond*100), 8),
 	}
 	gs.serveMux.Handle("/", http.FileServer(http.Dir(".")))
@@ -126,8 +127,9 @@ func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 			c.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
 		},
 	}
-	gs.addSubscriber(s)
-	defer gs.deleteSubscriber(s)
+	key := uuid.New().String()
+	gs.addSubscriber(key, s)
+	defer gs.deleteSubscriber(key)
 
 	for {
 		select {
@@ -151,7 +153,7 @@ func (gs *gatewayServer) publish(msg []byte) {
 
 	gs.publishLimiter.Wait(context.Background())
 
-	for s := range gs.subscribers {
+	for _, s := range gs.subscribers {
 		select {
 		case s.msgs <- msg:
 		default:
@@ -161,16 +163,16 @@ func (gs *gatewayServer) publish(msg []byte) {
 }
 
 // addSubscriber registers a subscriber.
-func (gs *gatewayServer) addSubscriber(s *subscriber) {
+func (gs *gatewayServer) addSubscriber(key string, s *subscriber) {
 	gs.subscribersMu.Lock()
-	gs.subscribers[s] = struct{}{}
+	gs.subscribers[key] = s
 	gs.subscribersMu.Unlock()
 }
 
 // deleteSubscriber deletes the given subscriber.
-func (gs *gatewayServer) deleteSubscriber(s *subscriber) {
+func (gs *gatewayServer) deleteSubscriber(key string) {
 	gs.subscribersMu.Lock()
-	delete(gs.subscribers, s)
+	delete(gs.subscribers, key)
 	gs.subscribersMu.Unlock()
 }
 
