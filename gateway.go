@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/ioutil"
 	"log"
@@ -50,6 +51,13 @@ func newGatewayServer() *gatewayServer {
 	gs.serveMux.Handle("/", http.FileServer(http.Dir(".")))
 	gs.serveMux.HandleFunc("/subscribe", gs.subscribeHandler)
 	gs.serveMux.HandleFunc("/publish", gs.publishHandler)
+
+	// admin handlers
+	gs.serveMux.HandleFunc("/init", gs.initHandler)
+	gs.serveMux.HandleFunc("/pub", gs.pubHandler)
+	gs.serveMux.HandleFunc("/subs", gs.subsHandler)
+	// public handlers
+	gs.serveMux.HandleFunc("/sub", gs.subHandler)
 
 	return gs
 }
@@ -109,6 +117,47 @@ func (gs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// initHandler initializes a subscriber and returns its key
+func (gs *gatewayServer) initHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	key, _ := gs.insertSubscriber()
+	resp := &initResp{
+		Key: key,
+	}
+
+	respBytes, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
+}
+
+func (gs *gatewayServer) pubHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func (gs *gatewayServer) subsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	keys, _ := gs.selectAllSubscribers()
+	resp := &subsResp{
+		Keys: keys,
+	}
+
+	respBytes, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
+}
+
+func (gs *gatewayServer) subHandler(w http.ResponseWriter, r *http.Request) {
+
+}
+
 // subscribe subscribes the given WebSocket to all broadcast messages.
 // It creates a subscriber with a buffered msgs chan to give some room to slower
 // connections and then registers the subscriber. It then listens for all messages
@@ -156,16 +205,19 @@ func (gs *gatewayServer) publish(msg []byte) {
 	gs.publishLimiter.Wait(context.Background())
 
 	for _, s := range gs.subscribers {
-		select {
-		case s.msgs <- msg:
-		default:
-			go s.closeSlow()
+		if s != nil {
+			select {
+			case s.msgs <- msg:
+			default:
+				go s.closeSlow()
+			}
 		}
 	}
 }
 
 // addSubscriber registers a subscriber.
 func (gs *gatewayServer) addSubscriber(key string, s *subscriber) {
+	gs.logf("addSubscriber called, adding %v", key)
 	gs.subscribersMu.Lock()
 	gs.subscribers[key] = s
 	gs.subscribersMu.Unlock()
@@ -173,10 +225,8 @@ func (gs *gatewayServer) addSubscriber(key string, s *subscriber) {
 
 // insertSubscriber initializes a subscriber with a random key
 func (gs *gatewayServer) insertSubscriber() (string, error) {
-	key, err := GenerateRandomString(16)
-	if err != nil {
-		return "", err
-	}
+	key, _ := GenerateRandomString(16)
+	gs.logf("insertSubscriber called, inserting %v", key)
 	gs.subscribersMu.Lock()
 	gs.subscribers[key] = nil
 	gs.subscribersMu.Unlock()
@@ -185,6 +235,7 @@ func (gs *gatewayServer) insertSubscriber() (string, error) {
 
 // deleteSubscriber deletes the given subscriber.
 func (gs *gatewayServer) deleteSubscriber(key string) {
+	gs.logf("deleteSubscriber called, deleting %v", key)
 	gs.subscribersMu.Lock()
 	delete(gs.subscribers, key)
 	gs.subscribersMu.Unlock()
@@ -214,6 +265,15 @@ func (gs *gatewayServer) selectSubscriber(key string) (*subscriber, error) {
 		return s, nil
 	}
 	return nil, errors.New("subscriber not found")
+}
+
+// selectAllSubscribers selects all subscribers
+func (gs *gatewayServer) selectAllSubscribers() ([]string, error) {
+	keys := make([]string, 0, len(gs.subscribers))
+	for key := range gs.subscribers {
+		keys = append(keys, key)
+	}
+	return keys, nil
 }
 
 func writeTimeout(ctx context.Context, timeout time.Duration, c *websocket.Conn, msg []byte) error {
