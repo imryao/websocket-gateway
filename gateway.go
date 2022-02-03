@@ -129,13 +129,23 @@ func (gs *gatewayServer) initHandler(w http.ResponseWriter, r *http.Request) {
 		Key: key,
 	}
 
-	respBytes, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(respBytes)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (gs *gatewayServer) pubHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
 
+	var req pubReq
+	json.NewDecoder(r.Body).Decode(&req)
+
+	gs.pub([]byte(req.Msg), req.Keys)
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (gs *gatewayServer) subsHandler(w http.ResponseWriter, r *http.Request) {
@@ -149,9 +159,9 @@ func (gs *gatewayServer) subsHandler(w http.ResponseWriter, r *http.Request) {
 		Keys: keys,
 	}
 
-	respBytes, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(respBytes)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (gs *gatewayServer) subHandler(w http.ResponseWriter, r *http.Request) {
@@ -175,10 +185,7 @@ func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 			c.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
 		},
 	}
-	key, err := GenerateRandomString(16)
-	if err != nil {
-		return err
-	}
+	key, _ := GenerateRandomString(18)
 	gs.addSubscriber(key, s)
 	defer gs.deleteSubscriber(key)
 
@@ -199,12 +206,36 @@ func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 // It never blocks and so messages to slow subscribers
 // are dropped.
 func (gs *gatewayServer) publish(msg []byte) {
-	gs.subscribersMu.Lock()
-	defer gs.subscribersMu.Unlock()
+	//gs.subscribersMu.Lock()
+	//defer gs.subscribersMu.Unlock()
 
 	gs.publishLimiter.Wait(context.Background())
 
 	for _, s := range gs.subscribers {
+		if s != nil {
+			select {
+			case s.msgs <- msg:
+			default:
+				go s.closeSlow()
+			}
+		}
+	}
+}
+
+// pub publishes the msg to given subscribers.
+// It never blocks and so messages to slow subscribers
+// are dropped.
+func (gs *gatewayServer) pub(msg []byte, keys []string) {
+	//gs.subscribersMu.Lock()
+	//defer gs.subscribersMu.Unlock()
+
+	gs.publishLimiter.Wait(context.Background())
+
+	for _, key := range keys {
+		s, err := gs.selectSubscriber(key)
+		if err != nil {
+			continue
+		}
 		if s != nil {
 			select {
 			case s.msgs <- msg:
@@ -225,7 +256,7 @@ func (gs *gatewayServer) addSubscriber(key string, s *subscriber) {
 
 // insertSubscriber initializes a subscriber with a random key
 func (gs *gatewayServer) insertSubscriber() (string, error) {
-	key, _ := GenerateRandomString(16)
+	key, _ := GenerateRandomString(18)
 	gs.logf("insertSubscriber called, inserting %v", key)
 	gs.subscribersMu.Lock()
 	gs.subscribers[key] = nil

@@ -7,3 +7,8 @@ type initResp struct {
 type subsResp struct {
 	Keys []string `json:"keys"`
 }
+
+type pubReq struct {
+	Keys []string `json:"keys"`
+	Msg  string   `json:"msg"`
+}
