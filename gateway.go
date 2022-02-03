@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
@@ -15,7 +13,7 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// gatewayServer enables broadcasting to a set of subscribers.
+// gatewayServer enables message delivering to a set of subscribers.
 type gatewayServer struct {
 	// subscriberMessageBuffer controls the max number
 	// of messages that can be queued for a subscriber
@@ -48,13 +46,12 @@ func newGatewayServer() *gatewayServer {
 		subscribers:             make(map[string]*subscriber),
 		publishLimiter:          rate.NewLimiter(rate.Every(time.Millisecond*100), 8),
 	}
-	gs.serveMux.Handle("/", http.FileServer(http.Dir(".")))
 	gs.serveMux.HandleFunc("/subscribe", gs.subscribeHandler)
-	gs.serveMux.HandleFunc("/publish", gs.publishHandler)
 
 	// admin handlers
 	gs.serveMux.HandleFunc("/init", gs.initHandler)
 	gs.serveMux.HandleFunc("/pub", gs.pubHandler)
+	gs.serveMux.HandleFunc("/broadcast", gs.broadcastHandler)
 	gs.serveMux.HandleFunc("/subs", gs.subsHandler)
 	// public handlers
 	gs.serveMux.HandleFunc("/sub", gs.subHandler)
@@ -98,72 +95,6 @@ func (gs *gatewayServer) subscribeHandler(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// publishHandler reads the request body with a limit of 8192 bytes and then publishes
-// the received message.
-func (gs *gatewayServer) publishHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-	body := http.MaxBytesReader(w, r.Body, 8192)
-	msg, err := ioutil.ReadAll(body)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-		return
-	}
-
-	gs.publish(msg)
-
-	w.WriteHeader(http.StatusAccepted)
-}
-
-// initHandler initializes a subscriber and returns its key
-func (gs *gatewayServer) initHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
-	key, _ := gs.insertSubscriber()
-	resp := &initResp{
-		Key: key,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (gs *gatewayServer) pubHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req pubReq
-	json.NewDecoder(r.Body).Decode(&req)
-
-	gs.pub([]byte(req.Msg), req.Keys)
-
-	w.WriteHeader(http.StatusAccepted)
-}
-
-func (gs *gatewayServer) subsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
-	keys, _ := gs.selectAllSubscribers()
-	resp := &subsResp{
-		Keys: keys,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
-}
-
 func (gs *gatewayServer) subHandler(w http.ResponseWriter, r *http.Request) {
 
 }
@@ -179,13 +110,14 @@ func (gs *gatewayServer) subHandler(w http.ResponseWriter, r *http.Request) {
 func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error {
 	ctx = c.CloseRead(ctx)
 
+	key, _ := GenerateRandomString(18)
 	s := &subscriber{
 		msgs: make(chan []byte, gs.subscriberMessageBuffer),
 		closeSlow: func() {
+			gs.logf("closeSlow called, closing %v", key)
 			c.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
 		},
 	}
-	key, _ := GenerateRandomString(18)
 	gs.addSubscriber(key, s)
 	defer gs.deleteSubscriber(key)
 
@@ -205,13 +137,15 @@ func (gs *gatewayServer) subscribe(ctx context.Context, c *websocket.Conn) error
 // publish publishes the msg to all subscribers.
 // It never blocks and so messages to slow subscribers
 // are dropped.
-func (gs *gatewayServer) publish(msg []byte) {
-	//gs.subscribersMu.Lock()
-	//defer gs.subscribersMu.Unlock()
-
+func (gs *gatewayServer) broadcast(msg []byte) {
 	gs.publishLimiter.Wait(context.Background())
 
-	for _, s := range gs.subscribers {
+	ss, err := gs.selectAllSubscribers()
+	if err != nil {
+		gs.logf("%v", err)
+		return
+	}
+	for _, s := range ss {
 		if s != nil {
 			select {
 			case s.msgs <- msg:
@@ -226,9 +160,6 @@ func (gs *gatewayServer) publish(msg []byte) {
 // It never blocks and so messages to slow subscribers
 // are dropped.
 func (gs *gatewayServer) pub(msg []byte, keys []string) {
-	//gs.subscribersMu.Lock()
-	//defer gs.subscribersMu.Unlock()
-
 	gs.publishLimiter.Wait(context.Background())
 
 	for _, key := range keys {
@@ -298,13 +229,26 @@ func (gs *gatewayServer) selectSubscriber(key string) (*subscriber, error) {
 	return nil, errors.New("subscriber not found")
 }
 
-// selectAllSubscribers selects all subscribers
-func (gs *gatewayServer) selectAllSubscribers() ([]string, error) {
+// selectAllSubscriberKeys selects all subscriber keys
+func (gs *gatewayServer) selectAllSubscriberKeys() ([]string, error) {
 	keys := make([]string, 0, len(gs.subscribers))
+	gs.subscribersMu.RLock()
 	for key := range gs.subscribers {
 		keys = append(keys, key)
 	}
+	gs.subscribersMu.RUnlock()
 	return keys, nil
+}
+
+// selectAllSubscribers selects all subscribers
+func (gs *gatewayServer) selectAllSubscribers() ([]*subscriber, error) {
+	ss := make([]*subscriber, 0, len(gs.subscribers))
+	gs.subscribersMu.RLock()
+	for _, s := range gs.subscribers {
+		ss = append(ss, s)
+	}
+	gs.subscribersMu.RUnlock()
+	return ss, nil
 }
 
 func writeTimeout(ctx context.Context, timeout time.Duration, c *websocket.Conn, msg []byte) error {

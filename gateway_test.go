@@ -207,7 +207,7 @@ func (cl *client) publish(ctx context.Context, msg string) (err error) {
 		}
 	}()
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cl.url+"/publish", strings.NewReader(msg))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cl.url+"/broadcast", strings.NewReader(msg))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
